@@ -1,0 +1,1023 @@
+---
+title: "Airline Satisfaction Analysis"
+output:
+  html_document:
+    fig_caption: yes
+    theme: paper
+    toc: true
+    toc_float: yes
+---
+# Objectives
+- Use principal component analysis and factor analysis to investigate the underlying patterns of the dataset and identify the factors that are highly correlated to the satisfaction level of US airline passengers.
+- Predict customers’ level of satisfaction with linear discriminant analysis and compare the result with step-wise regression and logistic regression.
+- Visualize new components/factors and compare them across different passengers’ profile.
+
+```{r setup, include=FALSE}
+options(messages = FALSE)
+
+# load packages
+library(tidyr)
+library(dplyr)
+library(psych)
+library(Hmisc)
+library(factoextra)
+library(nFactors)
+library(FactoMineR)
+library(pROC)
+library(nortest)
+library(ggplot2)
+library(visdat)
+library(corrr)
+library(MASS)
+library(caret)
+library(randomForest)
+library(AUC)
+library(ltm)
+```
+
+# The Dataset
+
+Source of data: https://www.kaggle.com/datasets/teejmahal20/airline-passenger-satisfaction
+
+This dataset contains an airline passenger satisfaction survey.
+
+|Variable|Description|Values|
+|---|---|---|
+|<span style="color: blue;">PASSENGERS INFORMATION|||
+|Satisfaction **(target)**|Airline satisfaction level|satisfied, neutral, or dissatisfied|
+|Gender|Gender of the passengers|Female, Male|
+|Customer.Type|The customer type|Loyal customer, disloyal Customer|
+|Age|The actual age of the passengers|
+|Type.of.Travel|Purpose of the flight of the passengers|Personal Travel, Business Travel|
+|Class|Travel class in the plane of the passengers|Business, Eco, Eco Plus|
+|<span style="color: blue;">FLIGHTS INFORMATION|||
+|Flight.Distance|The flight distance of this journey|
+|Departure.Delay.in.Minutes|Minutes delayed when depart|
+|Arrival.Delay.in.Minutes|Minutes delayed when arrive|
+|<span style="color: blue;">SERVICE RATINGS|||
+|Inflight.wifi.service|Satisfaction level of the inflight wifi service|0: Not Applicable; 1 - 5|
+|Departure.Arrival.time.convenient|Satisfaction level of Departure/Arrival time convenient|0: Not Applicable; 1 - 5|
+|Ease.of.Online.booking|Satisfaction level of online booking|0: Not Applicable; 1 - 5|
+|Gate.location|Satisfaction level of gate location|1 - 5|
+|Food.and.drink|Satisfaction level of food and drink|0: Not Applicable; 1 - 5|
+|Online.boarding|Satisfaction level of online boarding|0: Not Applicable; 1 - 5|
+|Seat.comfort|Satisfaction level of seat comfort|1 - 5|
+|Inflight.entertainment|Satisfaction level of inflight entertainment|0: Not Applicable; 1 - 5|
+|On-board.service|Satisfaction level of on-board service|0: Not Applicable; 1 - 5|
+|Leg.room.service|Satisfaction level of leg room service|0: Not Applicable; 1 - 5|
+|Baggage.handling|Satisfaction level of baggage handling|1 - 5|
+|Checkin.service|Satisfaction level of Check-in service|1 - 5|
+|Inflight.service|Satisfaction level of inflight service|0: Not Applicable; 1 - 5|
+|Cleanliness|Satisfaction level of cleanliness|0: Not Applicable; 1 - 5|
+
+```{r, include=FALSE}
+# read in the dataset
+air <- read.csv("Airline_Satisfaction.csv", row.names = 1)
+head(air)
+```
+
+# Exploratory Data Analysis
+
+```{r}
+# overview of data attributes
+str(air)
+```
+
+```{r}
+# descriptive summary of the data
+summary(air)
+```
+
+There are several points to note from our descriptive analysis so far:
+
+- The ranking features don't all share the same scale. This is because in these features, 0 denotes that the services were not offered on the flights, therefore not applicable for the customer to rank. With features where the ranking ranges from 1 - 5, it can be understood that the services were offered on all flights.
+
+    - **0 - 5** : Inflight.wifi.service, Departure.Arrival.time.convenient, Ease.of.Online.booking, Food.and.drink, Online.boarding, Inflight.entertainment, On.board.service, Leg.room.service, Inflight.service, Cleanliness
+
+    - **1 - 5** : Gate.location, Seat.comfort, Baggage.handling, Checkin.service
+
+- Departure.Delay.in.Minutes and Arrival.Delay.in.Minutes have entries of 0 in them. These entries do not represent missing values, but rather that flights did not experience any delays in arrival or departure.
+
+- There are 83 NA values in Arrival.Delay.in.Minutes.
+
+## Data Cleaning
+
+To avoid any bias and misinterpretation of data, we will check for missing values in the dataset. If missing values exist, we will look further into each column.
+
+```{r}
+# visualize missing data
+vis_miss(air) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5))
+
+# total number of missing values
+cat("\nTotal number of missing values:", sum(is.na(air)))
+
+# percentage of missing data
+cat("\nPercentage of missing data:", (sum(is.na(air))/nrow(air))*100, "%")
+```
+
+The visualization of missing values for the entire dataset confirms our observation earlier, that there are only NA values in Arrival.Delay.in.Minutes. Since they constitute only 0.32% of the entire dataset, it is safe to remove all rows with NA values.
+
+```{r}
+# drop missing values
+air <- air %>% drop_na()
+cat("Number of missing values:", sum(is.na(air)))
+```
+
+We also want to check if there are duplicated records in the dataset. Since ID is the unique key of the dataset, we can use ID to check and identify if duplication exists.
+
+```{r}
+# check for duplicates
+sum(duplicated(air$id))
+```
+
+## Data Variation
+
+### Response Variable
+
+```{r, fig.width=6, fig.height=6}
+# count and percentage of each categories in satisfaction
+satisfaction_count <- as.data.frame(table(air$satisfaction))
+satisfaction_count$percent <- satisfaction_count$Freq / sum(satisfaction_count$Freq) * 100
+
+# pie chart
+ggplot(satisfaction_count, aes(x = '', y = Freq, fill = factor(Var1))) +
+  geom_bar(stat = 'identity', width = 1) +
+  coord_polar(theta = 'y') +
+  theme_void() +
+  scale_fill_manual(values = c('#3F7ED5', '#C7DFF9'), name = '') +
+  labs(title = 'Pie chart of satisfaction') +
+  theme(legend.position = 'right',
+        legend.text = element_text(size = 10),
+        plot.title = element_text(face = 'bold', hjust = 0.5)) +
+  geom_text(aes(label = paste0(round(percent, 1), '%')),
+            position = position_stack(vjust = 0.5))
+```
+
+### Categorical Variables
+
+```{r, fig.width=6, fig.height=6}
+# name of categorical columns
+cat_cols <- colnames(air[c('Class', 'Customer.Type', 'Gender', 'Type.of.Travel')])
+
+for (col in cat_cols) {
+  # a data frame with the count of each category in the current column
+  cat_count <- data.frame(table(air[[col]]))
+
+  # a bar plot of the count data
+  print(ggplot(cat_count, aes(x = Var1, y = Freq)) +
+    geom_bar(stat = 'identity', fill = '#3F7ED5') +
+    geom_text(aes(label = Freq), vjust = -0.5) +
+    theme(plot.title = element_text(face = 'bold'),
+          axis.ticks = element_blank()) +
+    labs(title = col, x = '', y = "Count"))
+}
+```
+
+### Numerical Variables
+
+```{r, fig.width=6, fig.height=6}
+# name of numerical columns
+num_cols <- air %>%
+  select_if(function(x) length(unique(x)) > 6) %>%
+  colnames
+
+# histogram for each numerical column
+for (col in num_cols) {
+  print(ggplot(air, aes(x = .data[[col]])) +
+  geom_histogram(binwidth = 0.5, color = '#3F7ED5')+
+  labs(title = col, x = '', y = 'Frequency') +
+  theme(axis.ticks = element_blank(),
+        plot.title= element_text(face = "bold")))
+}
+```
+
+### Rank Variables
+
+```{r}
+# name of columns with rank data
+rank_cols <- air %>%
+  select_if(~ is.numeric(.) && n_distinct(.) <= 6) %>%
+  colnames()
+
+# reshape data from wide to long format
+rank_long <- air %>%
+  pivot_longer(cols = all_of(rank_cols),
+                names_to = 'column_name',
+                values_to = 'rank')
+
+# group data by column name and rank
+# calculate the count of each rank in each column
+rank_counts <- rank_long %>%
+  group_by(column_name, rank) %>%
+  summarise(count = n(), .groups = 'drop')
+```
+
+```{r, fig.width=6, fig.height=6}
+# plot stacked bars
+ggplot(rank_counts, aes(x = column_name, y = count, fill = factor(rank))) +
+  geom_bar(stat = 'identity') +
+  scale_fill_manual(values = c('#C7DFF9', '#A4C8F0', '#7FADEB', '#5E95E0', '#3F7ED5', '#2B5FA6'),
+                    name = 'Rank',
+                    labels = c('0', '1', '2', '3', '4', '5')) +
+  labs(x = '', y = 'Count', fill = "Rank") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        axis.ticks = element_blank(),
+        panel.background = element_blank())
+```
+
+```{r, fig.width=6, fig.height=6}
+for (col in rank_cols) {
+  # a data frame with the count of each category in the current column
+  rank_count <- data.frame(table(air[[col]]))
+
+  # a bar plot of the count data
+  print(ggplot(rank_count, aes(x = Var1, y = Freq)) +
+    geom_bar(stat = 'identity', fill = '#3F7ED5') +
+    geom_text(aes(label = Freq), vjust = -0.5) +
+    theme(plot.title = element_text(face = 'bold'),
+          axis.ticks = element_blank()) +
+    labs(title = col, x = '', y = "Count"))
+}
+```
+
+## Correlation
+```{r}
+# correlation matrix
+corr_matrix <- correlate(air[,c(4, 7:23)], diagonal = 1)
+corr_matrix
+```
+
+```{r, fig.width=10, fig.height=6}
+# heatmap of correlation
+corr_matrix %>%
+  rearrange(method = "MDS", absolute = FALSE) %>%
+  shave() %>%
+  rplot(shape = 15, colours = c("#D3D3D3", "#3F7ED5")) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 1, hjust = 1),
+        axis.text = element_text(size = 8),
+        axis.ticks = element_blank())
+```
+
+Before applying dimension deduction technique to the dataset, we can look at the correlation matrix to identify any strong / relatively strong positive or negative correlations between the numerical features.
+
+If we set a cutoff point of 0.3 for the correlation coefficient, we can see that **Age**, **Flight.Distance** and **Checkin.service** does not have any correlation coefficients higher than 0.3, indicating that these 3 variables are highly independent from other variables and should be excluded from our analysis.
+
+```{r}
+# set a cut-off point for correlation coefficients
+cutoff <- function(x) all(abs(x) < 0.3, na.rm = TRUE)
+
+# extract variables that has no coefficients
+correlate(air[,c(4, 7:23)]) %>%
+  focus_if(cutoff, mirror = FALSE)
+```
+
+# Subsets
+
+Since we are going to investigate the underlying patterns of the dataset and identify the factors that are highly correlated to the satisfaction level of US airline passengers, only numerical and rank data will be used. We will also exclude the **Age**, **Flight.Distance** and **Checkin.service** variable as mentioned above. In a later section, we will consider a subset of all numerical/rank and categorical variables for logistic regression.
+
+As such, several subsets will be created according to the purpose of each analysis.
+
+```{r}
+# numerical and ranked variables
+# with satisfaction variable
+df <- air[,c(8:18, 20:24)]
+cat("Subset df\nDimension:", dim(df), "\n\n")
+colnames(df)
+head(df)
+```
+
+```{r}
+# numerical and ranked variables
+# without satisfaction variable (for PCA & FA)
+df1 <- df[-16]
+cat("Subset df1\nDimension:", dim(df1), "\n\n")
+colnames(df1)
+head(df1)
+```
+
+```{r}
+# only ranked features
+# without satisfaction variable (for CA)
+df1_CA <- subset(df1, select = -c(4,7,11,14,15))
+cat("Subset df_CA\nDimension:", dim(df1_CA), "\n\n")
+colnames(df1_CA)
+head(df1_CA)
+```
+
+```{r}
+# all variables in the original dataset except id (for logistic regression model)
+all_df <- air[-1]
+cat("Subset all_df\nDimension:", dim(all_df), "\n\n")
+colnames(all_df)
+head(all_df)
+```
+
+# Principal Component Analysis
+
+Following the literature review on the study of flooding in Metro Manila, Principle Component can be used to analyze which factor(s) make significant contributions to the model. In fact, PCA is commonly applied to interval data, where it can help to identify patterns and relationships among the variables, and to reduce the dimension of the data to a smaller set of meaningful principal components.
+
+It's important to consider the scaling of the data before performing the procedure, as PCA is sensitive to the scale of the input variables. As such, we will first standardize the data before applying PCA to ensure that each variable contributes equally to the analysis.
+
+```{r}
+# perform pca on scaled data
+airline.pca <- prcomp(df1, scale = TRUE) # only for numeric variables
+
+# eigen vectors
+airline.pca$rotation
+```
+
+```{r}
+# variance of PCs / eigen values
+s <- (airline.pca$sdev)^2
+
+# a table of PC number and cumulative variance
+eigenval_table <- data.frame(
+  eigen_value = s
+)
+rownames(eigenval_table) <- paste0("PC", 1:length(s))
+
+# print the table
+print(eigenval_table)
+```
+
+## Optimal Number of Components
+
+There are 15 principle components (PCs), each consisting of parts of all variables and capture different portions of the total variance. To determine the optimal number of PCs to retain, we use 3 approaches: Scree plot, Total Variance and Kaiser Criterion.
+
+```{r}
+# Scree plot
+fviz_eig(airline.pca) +
+  geom_vline(xintercept = 5, linetype = "dashed", col = 'red')
+```
+
+```{r}
+# total variance
+
+# cumulative variance
+rs <- s/sum(s)
+
+# a table of PC number and cumulative variance
+var_table <- data.frame(
+  cumulative_variance = cumsum(rs)
+)
+rownames(var_table) <- paste0("PC", 1:length(rs))
+
+# print the table
+print(var_table)
+```
+
+```{r}
+# Kaiser criterion
+cat("Mean variance =", mean(s), "\n\n")
+
+# print the table
+print(eigenval_table)
+```
+
+Scree plot suggests retaining PC1 to PC5 since there are 5 points involved in the steep part of the curve. In total variance, 4 PCs capture around 67.8% of the total variance, 5 PCs capture around 74.8%. If we aim to capture 80 - 90% of the total variance, at least 7 PCs will be required. In Kaiser criterion, variance of PC1 to PC5 are greater than the average of variance, so 4 - 5 PCs are should be retained. After comparing the result, 5 PCs are selected in our PCA.
+
+Then, we obtain the loadings and check if they have some meaningful interpretation.
+
+## Loadings
+
+```{r}
+# obtain loadings for eigen vectors
+
+cbind(airline.pca$sdev[1]*airline.pca$rotation[,1],
+      airline.pca$sdev[2]*airline.pca$rotation[,2],
+      airline.pca$sdev[3]*airline.pca$rotation[,3],
+      airline.pca$sdev[4]*airline.pca$rotation[,4],
+      airline.pca$sdev[5]*airline.pca$rotation[,5])
+```
+
+For example, in PC1, a highly correlated group would be **Inflight.entertainment**, **Cleanliness **and **Seat.comfort**, while for PC2, a highly correlated group would be **Gate.location**, **Ease.of.Online.booking**, **Inflight.wifi.service** and **Departure.Arrival.time.convenient**. To further enhance the interpretation of the original variables, varimax rotation is considered.
+
+## Varimax Rotation
+
+```{r}
+# scale df1
+center_df1 <- scale(df1, center = TRUE, scale = TRUE)
+
+# apply varimax rotation to scaled df1
+fit <- principal(center_df1, nfactors = 5, rotate = "varimax")
+fit$loadings
+```
+
+The first 5 components captured around 75.1% of variance in vairmax rotation. Considering a cut-off value of 0.6:
+
+- Cleanliness, Food.and.drink, Inflight.entertainment and Seat.comfort are loaded on component 1, categorized as **In-flight experience**.
+
+- Departure.Arrival.time.convenient and Gate.location are loaded on component 2, categorized as **Convenience**.
+
+- Baggage.handling, Inflight.service, Leg.room.service and On.board.service are loaded on component 3, categorized as **Service**.
+
+- Departure.Delay.in.Minutes and Arrival.Delay.in.Minutes loaded on component 4, categorized as **Punctuation**.
+
+- Inflight.wifi.service, Ease.of.Online.booking and Online.boarding are loaded on component 5, categorized as **Technology**.
+
+## Visualization
+
+From the PCA results, we can also produce a 2-dimensional scatter plot for pairs of components, with each point color-coded according to the response of the satisfaction it represents. The following plot uses PC1 and PC4 to evaluate whether components can be classified by the response variable satisfaction. However, the result is not as expected. This could be due to PC1 and PC4 only capturing 33% of the total variance.
+
+```{r}
+# visualization
+pca_data <- as.data.frame(center_df1 %*% fit$loadings)
+pca_data$satisfaction <- df$satisfaction
+
+ggplot(pca_data, aes(x = RC1, y = RC4, color = satisfaction)) +
+  geom_point()
+```
+Try to produce a 2-dimensional scatter plot for pairs of components and compare with other catagorical variales like gender and class, the results are similar.
+
+```{r}
+# visualization
+pca_data2 <- as.data.frame(center_df1 %*% fit$loadings)
+pca_data2$Class <- air$Class
+
+ggplot(pca_data2, aes(x = RC1, y = RC4, color = Class)) +
+  geom_point()
+
+# visualization
+pca_data2 <- as.data.frame(center_df1 %*% fit$loadings)
+pca_data2$Gender <- air$Gender
+
+ggplot(pca_data2, aes(x = RC1, y = RC4, color = Gender)) +
+  geom_point()
+```
+
+# Factor Analysis
+
+## Data Assessment
+
+Apart from principal component analysis, we could also use factor analysis to identify latent variables in the data sets.
+
+Before conducting factor analysis, it is essential to first assess whether our dataset is appropriate for such analysis. This can be done using Bartlett's test and KMO test.
+
+Bartlett's test is a statistical test used to determine whether the correlation matrix of a set of variables is suitable for factor analysis. It tests the null hypothesis that the correlation matrix is an identity matrix, indicating that the variables are uncorrelated and unsuitable for factor analysis. If the null hypothesis is rejected, it indicates that there is significant correlation among the variables, suggesting that factor analysis may be appropriate.
+
+In practice, Bartlett's test is often used in conjunction with the Kaiser-Meyer-Olkin (KMO) measure of sampling adequacy to assess the suitability of data for factor analysis. The KMO measure assesses the degree of common variance among the variables, while Bartlett's test assesses the overall significance of the correlations. If both tests indicate that the data is suitable for factor analysis, then we can proceed with conducting the analysis.
+
+Our Bartlett's test produced a p-value of close to 0, which is less than significant level of 0.05, we can reject the null hypothesis and conclude that a factor analysis may be useful for our dataset.
+
+At the same time, KMO test gave an overall MSA of 0.73, meaning there is a significant number of factors in our dataset.
+
+```{r}
+# Bartlett's test
+correlations = cor(df1)
+cortest.bartlett(correlations, n = nrow(df1))
+```
+
+```{r}
+# KMO test
+KMO(correlations)
+```
+
+## Optimal Number of Factors
+
+Similar to principle component analysis, we can determine the number of factors using parallel analysis, Kaiser criterion and Scree plot.
+
+Maximum likelihood estimation (MLE) is used for conducting factor analysis. MLE for factor analysis provides a flexible and powerful method for modeling the underlying factor structure of a set of variables, and is well-suited to a wide range of data types and assumptions.
+
+```{r}
+# parallel analysis
+nofactors = fa.parallel(df1, fm="ml", fa="fa")
+```
+
+```{r}
+# Kaiser criterion
+# extract the number of eigenvalues
+cat("Old criterion (> 1.0) - Number of factors:", sum(nofactors$fa.values > 1.0),"\n")
+cat("New criterion (> 0.7) - Number of factors:", sum(nofactors$fa.values > .7))
+```
+
+```{r}
+# Scree plot and parallel analysis
+ev <- eigen(cor(df1)) # get eigenvalues
+ap <- parallel(subject=nrow(df1),var=ncol(df1),
+               rep=100,cent=.05)
+nS <- nScree(x=ev$values, aparallel=ap$eigen$qevpea)
+plotnScree(nS)
+```
+
+From the analysis above, the optimal number of factors is suggested to be between 4 and 5. Since we want to compare the result of PCA and FA, we will take the same number of factors as the number of principla components, which is 5.
+
+## Factor Analysis without Rotation
+
+```{r}
+# no rotation
+df.fa <- fa(df1, nfactors = 5, rotate = "none", fm="ml")
+
+# summary of the FA results
+df.fa # some empty loading because the value is too small.
+
+# diagram
+fa.diagram(df.fa)
+```
+
+Without any rotation, some groups can still be easily categorized, i.e. ML1 for punctuation and ML4 for convenience, while other groups are not as apparent. Let's consider rotation such that it redistributes the variance across factors to enhance the interpretation.
+
+##  Factor Analysis with Rotation
+
+```{r}
+# varimax rotation
+df.fa.varimax <- fa(df1, nfactors = 5, rotate = "varimax", fm="ml")
+
+# summary of the FA results
+df.fa.varimax # some empty loading because the value is too small.
+
+# diagram
+fa.diagram(df.fa.varimax)
+```
+
+```{r}
+# oblimin rotation
+df.fa.oblimin <- fa(df1, nfactors = 5, rotate = "oblimin", fm="ml")
+
+# summary of the FA results
+df.fa.oblimin # some empty loading because the value is too small.
+
+# diagram
+fa.diagram(df.fa.oblimin)
+```
+
+Varimax rotation produced clearer categorization for the variables. Specifically:
+
+- **In-flight experience:** Cleanliness, Seat.comfort, Food.and.drink, Inflight.entertainment
+
+- **Convenience:** Ease.of.Online.booking, Inflight.wifi.service, Gate.location, Departure.Arrival.time.convenient
+
+- **Service:** Inflight.service, Baggage.handling, On.board.service, Leg.room.service
+
+- **Punctuation:** Departure.Delay.in.Minutes, Arrival.Delay.in.Minutes
+
+- **Other:** Online.boarding
+
+It's no surprise that the categorization is similar to PCA and some grouppings are exactly the same. In terms of grouping, varimax rotation gave a more distinguish result in this dataset.
+
+# Linear Discriminant Analysis
+
+To maximize the separation between groups, we will conduct Linear Discriminant Analysis (LDA).
+
+```{r}
+# split the dataset into train set and test set (80/20)
+set.seed(100)
+sample <- sample.int(n = nrow(df), size = floor(.8*nrow(df)), replace = F) # 80% of dataset
+train <- df[sample, ]
+test <- df[-sample, ]
+```
+
+```{r}
+# LDA on train set using all the variables
+lda.sa <- lda(satisfaction~. , data=train)
+lda.sa
+```
+
+```{r}
+# prediction on test set
+sa.pred <- predict(lda.sa, newdata = test)
+```
+
+```{r}
+# accuracy and classification report
+summary(sa.pred$class)
+xtab <- table(sa.pred$class, test$satisfaction)
+
+# confusion matrix
+caret::confusionMatrix(xtab, positive = "satisfied")
+
+# store probabilities assigned to cases
+pb <- sa.pred$posterior
+
+# create data frame from probabilities
+pb <- as.data.frame(pb)
+
+# combine probabilities and cases in data frame
+pred.LDA <- data.frame(test$satisfaction,pb$satisfied)
+
+# change column names
+colnames(pred.LDA) <- c("target","score")
+
+# transform the target to 1 and 0
+labels <- as.factor(ifelse(pred.LDA$target=="satisfied", 1, 0))
+predictions <- pred.LDA$score
+```
+
+```{r, fig.width=8, fig.height=6}
+# ROC curve
+plot(roc(predictions, labels), min=0, max=1, type="l", main="LDA - ROC Chart")
+text(0.5, 0.8, paste0("LDA AUC = ", round(auc(roc(predictions, labels)), 5)), col = "#3F7ED5", cex = 1.0)
+```
+
+The AUC value of 0.87 (> 0.8) and an accuracy of 81.35% indicate that LDA model performed relatively well in predicting the satisfaction level.
+
+```{r}
+# Add predictions as a new column to the dataset for further analysis
+df_class <- df
+lda.full <- lda(satisfaction~. , data=df)
+pred.full <- predict(lda.full)
+df_class$lda_class <- pred.full$class
+head(df_class)
+```
+
+# Stepwise Regression
+
+Before we proceed to perform forward selection, backward elimination and step-wise regression on the same train and test data in LDA session, we first need to convert our response variable, **satisfaction** into numerical value.
+
+- 0 : neutral or dissatisfied
+- 1 : satisfied
+
+We will have 2 new dataframes (train_re & test_re) with all 15 predictors and 1 response variable numerically encoded.
+
+```{r}
+train_re <- train
+test_re <- test
+
+# convert the response variable into numerical data
+train_re$satisfaction <- ifelse(train_re$satisfaction=="satisfied", 1, 0)
+test_re$satisfaction <- ifelse(test_re$satisfaction=="satisfied", 1, 0)
+
+head(train_re)
+head(test_re)
+```
+
+We will also need to define an intercept-only model an a model with all predictors included, using the train_re data.
+
+```{r}
+# define intercept-only model
+intercept_only <- glm(satisfaction ~ 1, data=train_re, family = "binomial"(link="logit"))
+
+# define model with all predictors
+all <- glm(satisfaction ~ ., data=train_re, family = "binomial"(link="logit"))
+```
+
+## Forward Selection
+
+```{r}
+# perform forward stepwise regression
+forward <- step(intercept_only, direction='forward', scope=formula(all), trace=0)
+
+# view results of forward stepwise regression
+summary(forward)
+```
+
+```{r}
+# anova
+forward$anova
+```
+From the result, we can drop the following variables since keeping them do not reduce the AIC too much:
+
+- Gate.location
+- Departure.Delay.in.Minutes
+- Inflight.service
+- Food.and.drink
+
+## Backward Elimination
+
+```{r}
+# perform backward stepwise regression
+backward <- step(all, direction='backward', scope=formula(all), trace=0)
+
+# view results of backward stepwise regression
+summary(backward)
+```
+
+```{r}
+# anova
+backward$anova
+```
+
+From the result, we do not drop any variable in backward elimination process.
+
+## Stepwise Regression
+
+```{r}
+# perform  stepwise regression
+both <- step(intercept_only, direction='both', scope=formula(all), trace=0)
+
+# view results of stepwise regression
+summary(both)
+```
+
+```{r}
+# anova
+both$anova
+```
+
+From the result, we can drop the following variables since keeping them do not reduce the AIC too much:
+
+- Gate.location
+- Departure.Delay.in.Minutes
+- Inflight.service
+- Food.and.drink
+
+```{r}
+# Create the final model dropping the above 4 variables:
+model_final <- glm(formula = satisfaction ~ Inflight.wifi.service + Departure.Arrival.time.convenient +
+      Ease.of.Online.booking + Online.boarding + Seat.comfort + Inflight.entertainment +
+      On.board.service + Leg.room.service + Baggage.handling + Cleanliness +
+      Arrival.Delay.in.Minutes, family = binomial(logit), data = train_re)
+
+summary(model_final)
+```
+
+## Model Evaluation
+
+We will use the model_final to predict and evaluate its performance on the test set.
+
+```{r}
+# prediction using test_re data
+test_re$fitted <- predict(model_final, test_re)
+```
+
+```{r}
+# calculate the predicted probabilites
+test_re$prob <- exp(test_re$fitted)/(1+exp(test_re$fitted))
+
+# confusion matrix and statistics
+prob_cut_off = sum(test_re$satisfaction)/nrow(test_re)
+test_re$predict <- as.numeric(test_re$prob > prob_cut_off)
+xtab_num <- table(test_re$predict, test_re$satisfaction)
+
+caret::confusionMatrix(xtab_num, positive = "1")
+```
+
+```{r, fig.width=8, fig.height=6}
+# AUC plot (# Both curves from LDA and Step-wise regression in the same graph)
+
+rocplot_lda <- roc(predictions, labels) # from LDA
+rocplot_lda <- roc(predictions, labels) # from LDA
+rocplot_re <- roc(test_re$prob, as.factor(test_re$satisfaction)) # from Step-wise model
+
+plot(rocplot_lda, col = 'red', lty = 1, main = 'ROC')
+plot(rocplot_re, col = '#3F7ED5', lty = 2, add = TRUE)
+
+legend(0.8, 0.15, legend=c("LDA", "Step-wise"),
+       col=c("red", "#3F7ED5"), lty=1:2)
+
+text(0.3, 0.70, paste0("LDA AUC = ", round(auc(rocplot_lda), 5)), col = "red", cex = 1.0)
+text(0.3, 0.60, paste0("Step-wise Regression AUC = ", round(auc(rocplot_re), 5)), col = "#3F7ED5", cex = 1.0)
+```
+
+As we can see from the plot, the AUC value from the LDA and stepwise Rrgression model are similar (about 0.87) which indicates that both methods perform similarly well in terms of their ability to distinguish between the customers feeling satisfied and neutral or dissatisfied.
+
+# Correspondence Analysis
+
+To further explore the relationship between the rated features and the different ratings, we carry out correspondence analysis on the 10 variables that were rated.
+
+- Inflight.wifi.service
+- Departure.Arrival.time.convenient
+- Ease.of.Online.booking
+- Food.and.drink
+- Online.boarding
+- Inflight.entertainment
+- On.board.service
+- Leg.room.service
+- Inflight.service
+- Cleanliness
+
+## Contigency Table
+
+We will first create a contigency table with the 10 rated features as columns and the 6 ratings (0 - 5) as rows.
+
+```{r}
+# create a contingency table
+attach(df1_CA)
+names = colnames(df1_CA)
+c_matrix = matrix(0, nrow = 6, ncol = 10)
+
+for (i in 1:10){
+  for (j in 1:6){
+    c_matrix[j,i] = table(df1_CA[names[i]])[j]
+  }
+}
+detach(df1_CA)
+
+# convert table from matrix to dataframe
+ctable <- data.frame(c_matrix, check.names = FALSE)
+
+# rename rows (rating from 0 - 5)
+row.names(ctable) <- 0:5
+
+# rename columns (10 rated features)
+colnames(ctable) <- colnames(df1_CA)
+```
+
+```{r}
+# contigency table
+ctable
+```
+
+A quick chi-square test conducted on the contingency table presented a p-value of approximately 0, indicating that the row variables (ratings) has statistically significant associations with the column variables (rated features).
+
+```{r}
+# chi-square test
+chisq <- chisq.test(ctable)
+chisq
+```
+
+## Correspondence Analysis
+
+```{r}
+# CA
+res.ca.air <- CA(ctable, graph = FALSE)
+
+summary(res.ca.air)
+```
+
+## Biplot
+
+Dimension 1 (74.48%) and dimension 2 (18.23%) add up to nearly 93%. This means the two dimensions capture most of the information in the dataset.
+
+Overall, most ranked features are grouped together with the exception of **Departure.Arrival.time.convenient**. This could mean that **Departure.arrival.time.convenient** is less strongly associated with the other features.
+
+Whereas **Inflight.wifi.service** and **Ease.of.Online.booking** have their own little cluster. **Departure.Arrival.time.convenient** has little similarity with the rest of the variables. The variables that are the least dissimilar are **Ease.of.Online.booking** and **Online.boarding**.
+
+Rating 0 is very far away from all rated features, suggesting that rating 0 is highly discriminated from the other ratings and rated features. This is reasonable, since 0 means the services were not available on the flights for passengers to rate.
+
+There is a division between rating 1 - 3 in the upper right quadrant of the plot (positive association between ratings and rated features) and rating 4 - 5 in the lower left quadrant (negative association between ratings and rated features). This means that the relationship between ratings and rated features is not consistently positive or negative, and may indicate subgroups within the ratings or features.
+
+Now let’s examine the relationship between the column variables which are the services, and the row variables, which are the ratings.
+
+We can see that the rating of 2 and **Inflight.wifi.service** are both distant from the origin, meaning **Inflight.wifi.service** has an association with a low rating of 2. So **Inflight.wifi.service** has mostly been not great.
+
+Similarly, **Ease.of.Online.booking** and rating 1 are far from the origin, and the angle in between are small. So it’s not easy to book online. **Inflight.service** has mostly been great, whereas most of the service variables in the clusters are somewhere between neutral to positive.
+
+```{r}
+# biplot
+fviz_ca_biplot(res.ca.air, repel = TRUE)
+```
+
+## Contribution of Row and Column Variables
+
+### Dimension 1
+
+In dimension 1, rating 0 is the largest contributor to thee total variance amongst the row variables. However, it should be noted that 0 in our dataset does not indicate the lowest level of satisfaction, but that particular services were not offered on the flights and therefore, not applicable to rating. Amogst the column variables, **Ease.of.Online.booking**, **Inflight.wifi.service** and **Inflight.service** are the largest contributors.
+
+```{r}
+# contribution of axis 1 - row variables
+fviz_contrib(res.ca.air, choice="row", axes=1)
+```
+
+```{r}
+# contribution of axis 1 - column variables
+fviz_contrib(res.ca.air, choice="col", axes=1)
+```
+
+### Dimension 2
+
+In dimension 2, once again, rating 0 captures the largest amount of variance, along with **Departure.Arrival.time.convenient**.
+
+```{r}
+# contribution of axis 2 - row variables
+fviz_contrib(res.ca.air, choice="row", axes=2)
+```
+
+```{r}
+# contribution of axis 2 - column variables
+fviz_contrib(res.ca.air, choice="col", axes=2)
+```
+
+# Further Analysis
+
+## Logistic Regression
+
+To further explore the prediction power of the statistical tools we have utilized so far, we will conduct a comparison between the following models:
+
+- LDA model (in previous section): consists of 10 ranked variables and the response variable.
+- Step-wise regression model (in previous section): consists of numerical and ranked variables (note that **Food.and.drink** and **Inflight.service** are excluded), and the response variable.
+- Logistic regression model with only PCs: consists of only the principal components and the response variable.
+- Logistic regression model with all numerical and categorical variables from the original dataset (note that **id** is excluded, and the response variable.
+
+### Model with Principal Components
+
+```{r}
+# convert PCs into a dataframe
+df_pca <- as.data.frame(airline.pca$x)
+
+# add the response variable to the dataframe
+df_pca["satisfaction"] <- df$satisfaction
+
+# numerically encode the response variable
+df_pca$satisfaction <- ifelse(df_pca$satisfaction=="satisfied", 1, 0)
+
+# a dataframe of only PCs and the response variable
+head(df_pca)
+```
+
+```{r}
+# train/test split (80/20)
+sample_pca <- sample.int(n = nrow(df_pca), size = floor(.8*nrow(df_pca)), replace = F) # 80% of dataset
+train_pca <- df_pca[sample, ]
+test_pca <- df_pca[-sample, ]
+```
+
+```{r}
+# fit model on train set
+model_train_pca <- glm(satisfaction ~ ., family = "binomial"(link="logit"), data = train_pca)
+
+# use test set to predict
+test_pca$fitted_pca <- predict(model_train_pca, test_pca)
+```
+
+```{r}
+# calculate the predicted probabilities
+test_pca$prob_pca <- exp(test_pca$fitted_pca)/(1+exp(test_pca$fitted_pca))
+
+# the classification report: sensitivity, specificity and accuracy
+prob_cut_off_pca = sum(test_pca$satisfaction)/nrow(test_pca)
+test_pca$predict <- as.numeric(test_pca$prob_pca > prob_cut_off_pca)
+xtab_pca <- table(test_pca$predict, test_pca$satisfaction)
+
+caret::confusionMatrix(xtab_pca, positive = "1")
+```
+
+### Model with all Numerical and Categorical Variables
+
+```{r}
+# convert categorical variables into numerical
+all_df$satisfaction <- ifelse(all_df$satisfaction=="satisfied", 1, 0)
+all_df$Class <- as.numeric(as.factor(all_df$Class))
+all_df$Customer.Type <- ifelse(all_df$Customer.Type =="Loyal Customer", 1, 0)
+all_df$Gender <- ifelse(all_df$Gender=="Male", 1, 0)
+all_df$Type.of.Travel <- ifelse(all_df$Type.of.Travel =="Personal Travel", 1, 0)
+
+head(all_df,2)
+```
+
+```{r}
+# train/test split (80/20)
+sample_cat <- sample.int(n = nrow(all_df), size = floor(.8*nrow(all_df)), replace = F) # 80% of dataset
+train_cat <- all_df[sample_cat, ]
+test_cat <- all_df[-sample_cat, ]
+```
+
+```{r}
+# fit model on train set
+model_cat <- glm(satisfaction ~ ., family = "binomial"(link="logit"), data = train_cat)
+
+# use test set to predict
+test_cat$fitted <- predict(model_cat, test_cat)
+```
+
+```{r}
+# calculate the predicted probabilities
+test_cat$prob <- exp(test_cat$fitted)/(1+exp(test_cat$fitted))
+
+# the classification report: sensitivity, specificity and accuracy
+prob_cut_off_cat = sum(test_cat$satisfaction)/nrow(test_cat)
+test_cat$predict <- as.numeric(test_cat$prob > prob_cut_off_cat)
+xtab_cat <- table(test_cat$predict, test_cat$satisfaction)
+
+caret::confusionMatrix(xtab_cat, positive = "1")
+```
+
+When comparing the prediction results from the LDA model, the logistic regression model with only principal components and the logistic regression model with all numerical and categorical variables, we can see that all three models perform similarly well. Specifically, they achieved an accuracy of 80.4 - 86.8%, sensitivity ranging from 78.2 - 84.6% and specificity ranging from 79.3 - 88.5%. The logistic regression model with all numerical and categorical variables has the highest accuracy, sensitivity and specificity, although the improvement over other models is not significant enough to warrant further consideration.
+
+## Reliability of Factor Analysis
+
+We can use Cronbach's alpha coefficient to assess internal consistency, which measures the degree to which items in a factor are correlated with each other. Cronbach's alpha ranges from 0 to 1, where higher values indicate greater internal consistency. A coefficient higher than 0.6 is generally considered acceptable for most research purposes.
+
+Except for the group "Others", the value of Cronbach's alpha coefficients are higher than 0.6, indicating a moderate to high level of internal consistency between the items in each group.
+
+Since the group "Others" consists of only one item, **Online.Boarding**, Cronbach's alpha coefficient will not be applicable.
+
+```{r}
+# group the data
+In_flight_experience <- subset(df, select = c(Inflight.entertainment, Cleanliness, Seat.comfort, Food.and.drink))
+Convenience <- subset(df, select = c(Ease.of.Online.booking, Inflight.wifi.service, Gate.location, Departure.Arrival.time.convenient))
+Service <- subset(df, select = c(Baggage.handling, Inflight.service, On.board.service, Leg.room.service))
+Punctuation <- subset(df, select = c(Departure.Delay.in.Minutes, Arrival.Delay.in.Minutes))
+```
+
+```{r}
+# Cronbach's alpha coefficient
+cronbach.alpha(In_flight_experience)
+cronbach.alpha(Convenience)
+cronbach.alpha(Service)
+cronbach.alpha(Punctuation)
+```
+
+# Conclusion
+
+This project employed Principal Component Analysis (PCA) and Factor Analysis (FA) to examine the fundamental structure of the US Airline Passengers dataset and detect features that are strongly linked to the passengers' satisfaction level. The results showed that while there are some differences in the grouping between PCA and FA, interval features can generally be categorized into 5 groups:
+
+- In-flight experience
+- Convenience
+- Service
+- Punctuation
+- Technology (PCA) / Others (FA)
+
+To assess the reliability of FA, Cronbach's alpha coefficient for each group created from the FA procedure was calculated. The coefficient values of higher than 0.6 confirmed a relatively high internal consistency between items in each group.
+
+Linear Discriminant Analysis (LDA) was also utilized on the basis of a train/test dataset split in search of linear combinations of variables that could maximize the separation between groups and afterward, prediction of passengers' satisfaction level. The outcomes indicated an accuracy of 81.35%, and the AUC value of 0.87 confirmed the relatively good performance of the prediction model.
+
+A model built on the results of step-wise regression was also studied and compared with the LDA model. In terms of accuracy, the step-wise regression model performed as well as the LDA model, achieving an accuracy of 80.38% and the same AUC value of 0.87.
+
+To delve deeper into the relationship between the rated features and the different ratings, correspondence analysis was conducted. Approximately 92.71% of the total variance are captured in the first 2 dimensions, with rating 0 (service not applicable for rating) being the largest contributor in both dimensions.
+
+The performance of the LDA model, the step-wise regression model, a logistic regression model with only the principal components and a logistic regression model with all original variables are comparable.
+
+# References
+
+SEE, J. C. G., & PORIO, E. E. (2015). Assessing Social Vulnerability to Flooding in Metro Manila Using Principal Component Analysis. Philippine Sociological Review, 63, 53–80. http://www.jstor.org/stable/24717187
